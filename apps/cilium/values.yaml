@@ -1,0 +1,10 @@
+kubeProxyReplacement: partial
+tunnel: vxlan
+operator:
+  replicas: 1
+ipam:
+  mode: cluster-pool
+cni:
+  exclusive: false
+k8sServiceHost: kubernetes.default.svc
+k8sServicePort: 443
