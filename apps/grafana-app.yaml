@@ -10,11 +10,8 @@ spec:
     chart: grafana
     targetRevision: 7.3.10
     helm:
-      values: |
-        adminPassword: admin
-        service:
-          type: NodePort
-          nodePort: 32000
+      valueFiles:
+        - values.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: monitoring

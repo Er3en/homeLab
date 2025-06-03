@@ -1,94 +1,85 @@
-# HomeLab GitOps with Argo CD
+## 📦 homeLab — GitOps Kubernetes Cluster with Argo CD, Cilium, Prometheus, Loki and Grafana
 
-This project demonstrates a full GitOps workflow using **Argo CD**, **Helm**, and **Kubernetes** (Docker Desktop or bare-metal/k3s). It also includes a complete setup for managing cluster-level components such as the **Cilium CNI** plugin via Argo CD.
-
----
-
-## 📁 Repository Structure
-
-```
-homeLab/
-├── bootstrap/
-│   └── root-app.yaml            # App of Apps for Argo CD
-├── apps/
-│   └── cilium/
-│       ├── cilium-app.yaml     # Argo Application to install Cilium
-│       └── values.yaml         # Helm values for Cilium
-```
+This project sets up a complete **GitOps-powered home Kubernetes lab**, managed by **Argo CD**, and includes modern networking, monitoring, and logging components. Ideal for learning, experimenting, and managing clusters declaratively.
 
 ---
 
-## 🚀 Prerequisites
+## 🔧 What's included?
 
-- Running Kubernetes cluster (e.g. Docker Desktop, k3s, kubeadm)
-- `kubectl` configured to access the cluster
-- Argo CD installed:
-  ```bash
-  kubectl create namespace argocd
-  kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-  ```
+| Component     | Purpose                                                                 |
+|---------------|-------------------------------------------------------------------------|
+| **Argo CD**   | GitOps controller that automatically syncs manifests from Git           |
+| **Cilium**    | CNI plugin with eBPF-based networking and security for Kubernetes       |
+| **Prometheus**| Collects time-series metrics from nodes, pods, and applications         |
+| **Grafana**   | Visualizes metrics from Prometheus and logs from Loki                   |
+| **Loki**      | Lightweight log aggregation system (Prometheus-style for logs)          |
+| **Promtail**  | Log shipping agent that collects logs from pods and sends them to Loki  |
 
 ---
 
-## ⚙️ Step-by-Step Installation
-
-### 1. Clone this repository
+## 📁 Project Structure
 
 ```bash
-git clone https://github.com/<your-user>/homeLab.git
-cd homeLab
+.
+├── bootstrap/
+│   └── root-app.yaml         # Root Argo CD Application (App of Apps)
+├── apps/
+│   ├── cilium-app.yaml       # Installs Cilium from Helm repo
+│   ├── prometheus-app.yaml   # Installs Prometheus from community Helm chart
+│   ├── grafana-app.yaml      # Installs Grafana with NodePort access
+│   ├── loki-app.yaml         # Installs Loki (log backend)
+│   ├── promtail-app.yaml     # Installs Promtail (log shipper)
+│   └── cilium/
+│       └── values.yaml       # Custom values for Cilium Helm chart
 ```
 
-### 2. Apply the Argo CD Root Application (App of Apps)
+---
 
+## 🚀 How to Use
+
+### 1. Prerequisites
+- Kubernetes cluster (e.g. Docker Desktop, K3s, or VMs)
+- `kubectl` access
+- Argo CD installed in the cluster
+
+### 2. Create namespaces (if missing)
+```bash
+kubectl create namespace argocd || true
+kubectl create namespace monitoring || true
+```
+
+### 3. Deploy the root Argo CD application
 ```bash
 kubectl apply -f bootstrap/root-app.yaml -n argocd
 ```
 
-This will instruct Argo CD to look into the `apps/` directory and deploy all defined `Application` manifests, including **Cilium**.
+This bootstraps all other applications from the `apps/` directory using the App of Apps pattern.
 
-### 3. Verify in Argo CD UI
+---
+
+## 🌐 Access Grafana
+
+Once Grafana is deployed via Argo CD:
 
 ```bash
-kubectl port-forward svc/argocd-server -n argocd 8080:443
+http://localhost:32000
 ```
 
-Visit [https://localhost:8080](https://localhost:8080)
+- Username: `admin`
+- Password: `admin`
 
-Login with:
-```bash
-# Get admin password:
-kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath="{.data.password}" | base64 -d
-```
+> ⚠️ Port `32000` is exposed via NodePort; adjust if necessary for your environment.
 
 ---
 
-## 🧠 What Gets Installed?
+## 🧠 Notes
 
-### ✅ Cilium CNI
-- Helm chart from https://helm.cilium.io
-- Installed in `kube-system` namespace
-- Provides Pod-to-Pod networking, NetworkPolicies, eBPF observability, etc.
+- Prometheus is the metric engine (no Alertmanager/PushGateway enabled)
+- Loki + Promtail handle logs from pods and integrate with Grafana
+- Cilium provides advanced networking using eBPF
 
-### 📦 Future additions (optional):
-- `apps/ingress/` → NGINX Ingress Controller
-- `apps/monitoring/` → Prometheus/Grafana
-- `apps/cert-manager/` → TLS/SSL automation
-
----
-
-## 🧪 Verify Cilium Installation
-
-```bash
-kubectl get pods -n kube-system -l k8s-app=cilium
-```
-
----
-
-## 🤝 Contributing
-Pull requests are welcome. Feel free to fork and submit a PR.
-
----
-
-## 📝 License
-MIT
+Feel free to extend the stack with:
+- Ingress (e.g. ingress-nginx)
+- Cert-Manager for TLS
+- Sealed Secrets for secure GitOps secrets
+- Argo Rollouts for progressive delivery

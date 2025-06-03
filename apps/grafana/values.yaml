@@ -1,0 +1,4 @@
+adminPassword: admin
+service:
+  type: NodePort
+  nodePort: 32000

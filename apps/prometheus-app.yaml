@@ -10,11 +10,8 @@ spec:
     chart: prometheus
     targetRevision: 25.21.0
     helm:
-      values: |
-        alertmanager:
-          enabled: false
-        pushgateway:
-          enabled: false
+      valueFiles:
+        - values.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: monitoring
