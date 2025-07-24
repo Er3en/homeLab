@@ -1,0 +1,16 @@
+apiVersion: actions.summerwind.dev/v1alpha1
+kind: HorizontalRunnerAutoscaler
+metadata:
+  name: my-repo-autoscaler
+  namespace: actions-runner-system
+spec:
+  scaleTargetRef:
+    name: my-repo-runner
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: PercentageRunnersBusy
+      scaleUpThreshold: 0.75
+      scaleDownThreshold: 0.25
+      scaleUpFactor: 2
+      scaleDownFactor: 0.5

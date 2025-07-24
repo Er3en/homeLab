@@ -1,0 +1,27 @@
+name: ARC Test Runner
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  arc-test:
+    name: Run on ARC Kubernetes Runner
+    runs-on: [self-hosted, my-repo-runner-jpxwg-crdmw]  # ARC runners always register with 'self-hosted'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Print environment
+        run: |
+          echo "Running on $(uname -a)"
+          echo "GitHub workspace: $GITHUB_WORKSPACE"
+
+      - name: Test Docker
+        run: |
+          docker version || echo "Docker not available on this runner."
+
+      - name: List files
+        run: ls -la
