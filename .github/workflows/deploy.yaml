@@ -1,0 +1,53 @@
+name: Deploy ARC to K8s
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    environment:
+      name: ${{ inputs.environment }}
+    runs-on: [self-hosted]
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set KUBECONFIG
+        run: echo "${{ secrets[format('KUBECONFIG_{0}', inputs.environment | upper)] }}" > kubeconfig
+        env:
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
+
+      - name: Setup Kube & Helm
+        run: |
+          mkdir -p ~/.kube
+          cp kubeconfig ~/.kube/config
+          chmod 600 ~/.kube/config
+        shell: bash
+
+      - name: Add Helm repos
+        run: |
+          helm repo add actions-runner-controller https://actions-runner-controller.github.io/actions-runner-controller
+          helm repo update
+
+      - name: Install ARC
+        run: |
+          helm upgrade --install arc actions-runner-controller/actions-runner-controller \
+            --namespace actions-runner-system \
+            --create-namespace \
+            -f helm/arc/values.yaml
+
+      - name: Deploy RunnerDeployment
+        run: |
+          kubectl apply -f helm/arc/runner.yaml
