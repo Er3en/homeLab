@@ -9,3 +9,7 @@ spec:
   template:
     spec:
       repository: Er3en/homeLab
+      # image: yourregistry.com/your-custom-image:tag
+      #dockerdWithinRunnerContainer: true
+      # labels:
+      #   - custom
