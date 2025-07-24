@@ -9,7 +9,7 @@ on:
 jobs:
   arc-test:
     name: Run on ARC Kubernetes Runner
-    runs-on: [self-hosted, my-repo-runner-jpxwg-crdmw]  # ARC runners always register with 'self-hosted'
+    runs-on: [self-hosted]  # ARC runners always register with 'self-hosted'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
