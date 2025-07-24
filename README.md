@@ -1,4 +1,4 @@
-## 📦 homeLab — GitOps Kubernetes Cluster with Argo CD, Cilium, Prometheus, Loki and Grafana
+<!-- ## 📦 homeLab — GitOps Kubernetes Cluster with Argo CD, Cilium, Prometheus, Loki and Grafana
 
 This project sets up a complete **GitOps-powered home Kubernetes lab**, managed by **Argo CD**, and includes modern networking, monitoring, and logging components. Ideal for learning, experimenting, and managing clusters declaratively.
 
@@ -82,4 +82,4 @@ Feel free to extend the stack with:
 - Ingress (e.g. ingress-nginx)
 - Cert-Manager for TLS
 - Sealed Secrets for secure GitOps secrets
-- Argo Rollouts for progressive delivery
+- Argo Rollouts for progressive delivery -->
