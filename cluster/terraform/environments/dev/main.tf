@@ -1,19 +1,19 @@
 terraform {
   required_version = ">= 1.0"
-  
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
   }
-  
+
   # No backend configuration here - will be provided dynamically
 }
 
 provider "aws" {
   region = var.aws_region
-  
+
   default_tags {
     tags = {
       Environment = var.environment
@@ -178,7 +178,7 @@ resource "aws_eks_node_group" "main" {
   instance_types  = [var.node_instance_type]
   ami_type        = "AL2_x86_64"
   capacity_type   = "ON_DEMAND"
-  disk_size      = 20
+  disk_size       = 20
 
   scaling_config {
     desired_size = var.node_desired_size

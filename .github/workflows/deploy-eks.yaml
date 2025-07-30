@@ -67,8 +67,11 @@ jobs:
       - name: Check AWS connectivity
         run: |
           echo "🔗 Testing AWS connectivity..."
-          aws sts get-caller-identity
+          ACCOUNT=$(aws sts get-caller-identity --query 'Account' --output text)
+          USERNAME=$(aws sts get-caller-identity --query 'Arn' --output text | cut -d'/' -f2)
           echo "✅ AWS connectivity verified"
+          echo "   Account: ***${ACCOUNT: -6}"
+          echo "   User: ${USERNAME:0:3}***"
 
       - name: Check if cluster already exists
         id: cluster_check
