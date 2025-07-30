@@ -1,4 +1,4 @@
-name: Deploy EKS with Validation and Cleanup
+name: Deploy EKS
 
 on:
   workflow_dispatch:
@@ -88,14 +88,14 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Format Check
-        working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         run: |
           echo "🎨 Checking Terraform formatting..."
           terraform fmt -check
           echo "✅ Terraform format check passed"
 
       - name: Terraform Init
-        working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         run: |
           echo "🚀 Initializing Terraform..."
           terraform init \
@@ -106,7 +106,7 @@ jobs:
             -backend-config="encrypt=true"
 
       - name: Terraform Validate
-        working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         run: |
           echo "✅ Validating Terraform configuration..."
           terraform validate
@@ -137,7 +137,7 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
-        working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         run: |
           terraform init \
             -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
@@ -148,7 +148,7 @@ jobs:
 
       - name: Terraform Plan
         id: plan
-        working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         env:
           TF_VAR_cluster_name: ${{ github.event.inputs.name }}
           TF_VAR_environment: ${{ github.event.inputs.environment }}
@@ -176,7 +176,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: terraform-plan
-          path: ./terraform/environments/${{ github.event.inputs.environment }}/tfplan
+          path: ./cluster/terraform/environments/${{ github.event.inputs.environment }}/tfplan
           retention-days: 1
 
   deploy:
@@ -211,10 +211,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: terraform-plan
-          path: ./terraform/environments/${{ github.event.inputs.environment }}
+          path: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
 
       - name: Terraform Init
-        working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         run: |
           terraform init \
             -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
@@ -225,7 +225,7 @@ jobs:
 
       - name: Terraform Apply
         id: apply
-        working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         env:
           TF_VAR_cluster_name: ${{ github.event.inputs.name }}
           TF_VAR_environment: ${{ github.event.inputs.environment }}
@@ -236,7 +236,7 @@ jobs:
 
       - name: Get Terraform Outputs
         id: output
-        working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         run: |
           cluster_endpoint=$(terraform output -raw cluster_endpoint)
           cluster_name=$(terraform output -raw cluster_name)
@@ -369,7 +369,7 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
-        working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         run: |
           terraform init \
             -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
@@ -379,7 +379,7 @@ jobs:
             -backend-config="encrypt=true"
 
       - name: Terraform Destroy
-        working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         env:
           TF_VAR_cluster_name: ${{ github.event.inputs.name }}
           TF_VAR_environment: ${{ github.event.inputs.environment }}
