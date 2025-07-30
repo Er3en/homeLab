@@ -1,4 +1,4 @@
-name: Deploy ARC to K8s
+name: Deploy EKS 
 
 on:
   workflow_dispatch:
