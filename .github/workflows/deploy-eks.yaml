@@ -92,60 +92,9 @@ jobs:
         run: |
           echo "📋 Creating Terraform plan..."
           terraform plan \
-            -out=tfplan \
             -detailed-exitcode \
             -no-color
-          
-
-      - name: Upload Plan
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-plan
-          path: ./cluster/terraform/environments/${{ github.event.inputs.environment }}/tfplan
-          retention-days: 1
-
-  deploy:
-    name: 🚀 Deploy EKS
-    needs: validate_and_plan
-    environment: ${{ github.event.inputs.environment }}
-    runs-on: ubuntu-latest
-    outputs:
-      cluster_endpoint: ${{ steps.output.outputs.cluster_endpoint }}
-      cluster_name: ${{ steps.output.outputs.cluster_name }}
-      deployment_status: ${{ steps.apply.outcome }}
-      
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: ${{ vars.AWS_REGION }}
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
-
-      - name: Download Plan & Apply
-        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
-        env:
-          TF_VAR_cluster_name: ${{ github.event.inputs.name }}
-          TF_VAR_environment: ${{ github.event.inputs.environment }}
-        run: |
-          # Download plan
-          cd ../../../..
-          mkdir -p ./cluster/terraform/environments/${{ github.event.inputs.environment }}
-          
-      - name: Download Terraform Plan
-        uses: actions/download-artifact@v4
-        with:
-          name: terraform-plan
-          path: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
+        
 
       - name: Terraform Init & Apply
         id: apply
@@ -153,16 +102,9 @@ jobs:
         env:
           TF_VAR_cluster_name: ${{ github.event.inputs.name }}
           TF_VAR_environment: ${{ github.event.inputs.environment }}
-        run: |
-          terraform init \
-            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
-            -backend-config="key=eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate" \
-            -backend-config="region=${{ vars.AWS_REGION }}" \
-            -backend-config="dynamodb_table=${{ vars.TF_STATE_LOCK_TABLE }}" \
-            -backend-config="encrypt=true"
-          
+        run: |         
           echo "🚀 Deploying EKS cluster..."
-          terraform apply tfplan
+          terraform apply 
           echo "✅ Deployment completed"
 
       - name: Get Outputs
@@ -179,8 +121,8 @@ jobs:
 
   verify:
     name: ✅ Verify & Connect
-    needs: [validate_and_plan, deploy]
-    if: needs.deploy.outputs.deployment_status == 'success'
+    needs: [validate_and_plan]
+    if: needs.validate_and_plan.outputs.deployment_status == 'success'
     environment: ${{ github.event.inputs.environment }}
     runs-on: ubuntu-latest
     outputs:
@@ -258,14 +200,14 @@ jobs:
 
   cleanup:
     name: 🧹 Cleanup on Failure
-    needs: [validate_and_plan, deploy, verify]
+    needs: [validate_and_plan, verify]
     if: |
       always() &&
       github.event.inputs.destroy_on_failure == 'true' &&
       (
-        needs.deploy.result == 'failure' ||
+        needs.validate_and_plan.result == 'failure' ||
         needs.verify.result == 'failure' ||
-        needs.deploy.result == 'cancelled' ||
+        needs.validate_and_plan.result == 'cancelled' ||
         needs.verify.result == 'cancelled'
       )
     environment: ${{ github.event.inputs.environment }}

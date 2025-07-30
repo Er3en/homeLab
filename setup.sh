@@ -1,29 +1,4 @@
-#!/bin/zsh
+for cluster in $(aws eks list-clusters --region eu-central-1 --query 'clusters[]' --output text); do for ng in $(aws eks list-nodegroups --cluster-name $cluster --region eu-central-1 --query 'nodegroups[]' --output text); do aws eks delete-nodegroup --cluster-name $cluster --nodegroup-name $ng --region eu-central-1 >/dev/null 2>&1; done; aws eks delete-cluster --name $cluster --region eu-central-1 >/dev/null 2>&1; done
 
-set -e
-if ! command -v terraform &> /dev/null; then
-    echo "[ERROR] Terraform is not installed. Please install Terraform and try again."
-    exit 1
-fi
-if ! command -v ansible &> /dev/null; then
-    echo "[ERROR] Ansible is not installed. Please install Ansible and try again."
-    exit 1
-fi
-if ! command -v jq &> /dev/null; then
-    echo "[ERROR] jq is not installed. Please install jq and try again."
-    exit 1
-fi
-
-echo "[INFO] Running Terraform..."
-cd terraform || exit
-terraform init
-terraform apply -auto-approve
-
-echo "[INFO] Creating Ansible inventory..."
-cd ../ansible || exit
-rm -f inventory.ini
-echo "[all]" > inventory.ini
-terraform -chdir=../terraform output -json public_ips | jq -r '.[] | .[]' >> inventory.ini
-
-echo "[INFO] Running Ansible Playbook..."
-ansible-playbook -i inventory.ini -u ubuntu --private-key ~/.ssh/id_rsa playbook.yml
+# Usuń wszystkie IAM role związane z klastrem "test"
+for role in test-cluster-role test-node-role; do echo "Deleting role: $role"; for policy in $(aws iam list-attached-role-policies --role-name $role --query 'AttachedPolicies[].PolicyArn' --output text 2>/dev/null || echo ""); do aws iam detach-role-policy --role-name $role --policy-arn $policy 2>/dev/null || true; done; aws iam delete-role --role-name $role 2>/dev/null || true; done
