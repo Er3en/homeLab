@@ -96,20 +96,8 @@ jobs:
             -detailed-exitcode \
             -no-color
           
-          exitcode=$?
-          echo "exitcode=$exitcode" >> $GITHUB_OUTPUT
-          
-          if [ $exitcode -eq 1 ]; then
-            echo "❌ Terraform plan failed"
-            exit 1
-          elif [ $exitcode -eq 2 ]; then
-            echo "📝 Changes detected - deployment needed"
-          else
-            echo "✅ No changes needed"
-          fi
 
       - name: Upload Plan
-        if: steps.plan.outputs.exitcode == '2'
         uses: actions/upload-artifact@v4
         with:
           name: terraform-plan
@@ -119,7 +107,6 @@ jobs:
   deploy:
     name: 🚀 Deploy EKS
     needs: validate_and_plan
-    if: needs.validate_and_plan.outputs.plan_exitcode == '2'
     environment: ${{ github.event.inputs.environment }}
     runs-on: ubuntu-latest
     outputs:
