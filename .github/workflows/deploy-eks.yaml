@@ -260,10 +260,14 @@ jobs:
     name: 🧹 Cleanup on Failure
     needs: [validate_and_plan, deploy, verify]
     if: |
-      always() && 
-      github.event.inputs.destroy_on_failure == 'true' && 
-      (needs.deploy.outputs.deployment_status == 'failure' || 
-       needs.verify.outputs.health_status == 'failure')
+      always() &&
+      github.event.inputs.destroy_on_failure == 'true' &&
+      (
+        needs.deploy.result == 'failure' ||
+        needs.verify.result == 'failure' ||
+        needs.deploy.result == 'cancelled' ||
+        needs.verify.result == 'cancelled'
+      )
     environment: ${{ github.event.inputs.environment }}
     runs-on: ubuntu-latest
     
