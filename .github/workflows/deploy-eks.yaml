@@ -93,7 +93,8 @@ jobs:
           echo "📋 Creating Terraform plan..."
           terraform plan \
             -detailed-exitcode \
-            -no-color
+            -no-color \
+            -out=tfplan
         
 
       - name: Terraform Init & Apply
@@ -104,7 +105,7 @@ jobs:
           TF_VAR_environment: ${{ github.event.inputs.environment }}
         run: |         
           echo "🚀 Deploying EKS cluster..."
-          terraform apply 
+          terraform apply -no-color tfplan
           echo "✅ Deployment completed"
 
       - name: Get Outputs
@@ -149,7 +150,7 @@ jobs:
           echo "🔗 Configuring kubectl..."
           aws eks update-kubeconfig \
             --region ${{ vars.AWS_REGION }} \
-            --name ${{ needs.deploy.outputs.cluster_name }}
+            --name ${{ needs.validate_and_plan.outputs.cluster_name }}
           
           echo "⏳ Waiting for cluster readiness..."
           for i in {1..20}; do
