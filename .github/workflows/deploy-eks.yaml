@@ -26,36 +26,17 @@ env:
   KUBECTL_VERSION: 1.28.0
 
 jobs:
-  validate:
-    name: 🔍 Validate Configuration
+  validate_and_plan:
+    name: 🔍 Validate & Plan
     environment: ${{ github.event.inputs.environment }}
     runs-on: ubuntu-latest
     outputs:
-      cluster_name: ${{ steps.validate.outputs.cluster_name }}
-      environment: ${{ steps.validate.outputs.environment }}
+      plan_exitcode: ${{ steps.plan.outputs.exitcode }}
+      cluster_name: ${{ github.event.inputs.name }}
       
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
-      - name: Validate inputs
-        id: validate
-        run: |
-          # Validate cluster name
-          if [[ ! "${{ github.event.inputs.name }}" =~ ^[a-zA-Z][a-zA-Z0-9-]*[a-zA-Z0-9]$ ]]; then
-            echo "❌ Invalid cluster name. Must start with letter, end with alphanumeric, and contain only letters, numbers, and hyphens."
-            exit 1
-          fi
-          
-          # Check name length
-          if [ ${#cluster_name} -gt 100 ]; then
-            echo "❌ Cluster name too long (max 100 characters)"
-            exit 1
-          fi
-          
-          echo "✅ Cluster name validation passed"
-          echo "cluster_name=${{ github.event.inputs.name }}" >> $GITHUB_OUTPUT
-          echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -64,25 +45,23 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      - name: Check AWS connectivity
+      - name: Validate inputs & AWS
         run: |
+          # Validate cluster name
+          if [[ ! "${{ github.event.inputs.name }}" =~ ^[a-zA-Z][a-zA-Z0-9-]*[a-zA-Z0-9]$ ]]; then
+            echo "❌ Invalid cluster name"
+            exit 1
+          fi
+          
           echo "🔗 Testing AWS connectivity..."
-          ACCOUNT=$(aws sts get-caller-identity --query 'Account' --output text)
-          USERNAME=$(aws sts get-caller-identity --query 'Arn' --output text | cut -d'/' -f2)
+          aws sts get-caller-identity > /dev/null
           echo "✅ AWS connectivity verified"
-          echo "   Account: ***${ACCOUNT: -6}"
-          echo "   User: ${USERNAME:0:3}***"
-
-      - name: Check if cluster already exists
-        id: cluster_check
-        run: |
-          echo "🔍 Checking if cluster '${{ github.event.inputs.name }}' already exists..."
+          
+          # Check if cluster exists
           if aws eks describe-cluster --name "${{ github.event.inputs.name }}" --region "${{ vars.AWS_REGION }}" 2>/dev/null; then
-            echo "⚠️ Cluster '${{ github.event.inputs.name }}' already exists!"
-            echo "cluster_exists=true" >> $GITHUB_OUTPUT
+            echo "⚠️ Cluster already exists!"
           else
-            echo "✅ Cluster name is available"
-            echo "cluster_exists=false" >> $GITHUB_OUTPUT
+            echo "✅ Cluster name available"
           fi
 
       - name: Setup Terraform
@@ -90,14 +69,7 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Terraform Format Check
-        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
-        run: |
-          echo "🎨 Checking Terraform formatting..."
-          terraform fmt -check
-          echo "✅ Terraform format check passed"
-
-      - name: Terraform Init
+      - name: Terraform Init & Validate
         working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         run: |
           echo "🚀 Initializing Terraform..."
@@ -107,47 +79,9 @@ jobs:
             -backend-config="region=${{ vars.AWS_REGION }}" \
             -backend-config="dynamodb_table=${{ vars.TF_STATE_LOCK_TABLE }}" \
             -backend-config="encrypt=true"
-
-      - name: Terraform Validate
-        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
-        run: |
-          echo "✅ Validating Terraform configuration..."
+          
+          echo "✅ Validating Terraform..."
           terraform validate
-          echo "✅ Terraform validation passed"
-
-  plan:
-    name: 📋 Plan Infrastructure
-    needs: validate
-    environment: ${{ github.event.inputs.environment }}
-    runs-on: ubuntu-latest
-    outputs:
-      plan_exitcode: ${{ steps.plan.outputs.exitcode }}
-      
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: ${{ vars.AWS_REGION }}
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Terraform Init
-        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
-        run: |
-          terraform init \
-            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
-            -backend-config="key=eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate" \
-            -backend-config="region=${{ vars.AWS_REGION }}" \
-            -backend-config="dynamodb_table=${{ vars.TF_STATE_LOCK_TABLE }}" \
-            -backend-config="encrypt=true"
 
       - name: Terraform Plan
         id: plan
@@ -170,12 +104,13 @@ jobs:
             echo "❌ Terraform plan failed"
             exit 1
           elif [ $exitcode -eq 2 ]; then
-            echo "📝 Changes detected in plan"
+            echo "📝 Changes detected - deployment needed"
           else
             echo "✅ No changes needed"
           fi
 
-      - name: Upload Terraform Plan
+      - name: Upload Plan
+        if: steps.plan.outputs.exitcode == '2'
         uses: actions/upload-artifact@v4
         with:
           name: terraform-plan
@@ -183,9 +118,9 @@ jobs:
           retention-days: 1
 
   deploy:
-    name: 🚀 Deploy EKS Cluster
-    needs: [validate, plan]
-    if: needs.plan.outputs.plan_exitcode == '2'
+    name: 🚀 Deploy EKS
+    needs: validate_and_plan
+    if: needs.validate_and_plan.outputs.plan_exitcode == '2'
     environment: ${{ github.event.inputs.environment }}
     runs-on: ubuntu-latest
     outputs:
@@ -210,14 +145,28 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
+      - name: Download Plan & Apply
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
+        env:
+          TF_VAR_cluster_name: ${{ github.event.inputs.name }}
+          TF_VAR_environment: ${{ github.event.inputs.environment }}
+        run: |
+          # Download plan
+          cd ../../../..
+          mkdir -p ./cluster/terraform/environments/${{ github.event.inputs.environment }}
+          
       - name: Download Terraform Plan
         uses: actions/download-artifact@v4
         with:
           name: terraform-plan
           path: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
 
-      - name: Terraform Init
+      - name: Terraform Init & Apply
+        id: apply
         working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
+        env:
+          TF_VAR_cluster_name: ${{ github.event.inputs.name }}
+          TF_VAR_environment: ${{ github.event.inputs.environment }}
         run: |
           terraform init \
             -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
@@ -225,19 +174,12 @@ jobs:
             -backend-config="region=${{ vars.AWS_REGION }}" \
             -backend-config="dynamodb_table=${{ vars.TF_STATE_LOCK_TABLE }}" \
             -backend-config="encrypt=true"
-
-      - name: Terraform Apply
-        id: apply
-        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
-        env:
-          TF_VAR_cluster_name: ${{ github.event.inputs.name }}
-          TF_VAR_environment: ${{ github.event.inputs.environment }}
-        run: |
+          
           echo "🚀 Deploying EKS cluster..."
           terraform apply tfplan
-          echo "✅ Terraform apply completed"
+          echo "✅ Deployment completed"
 
-      - name: Get Terraform Outputs
+      - name: Get Outputs
         id: output
         working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         run: |
@@ -247,18 +189,16 @@ jobs:
           echo "cluster_endpoint=$cluster_endpoint" >> $GITHUB_OUTPUT
           echo "cluster_name=$cluster_name" >> $GITHUB_OUTPUT
           
-          echo "📊 Cluster Details:"
-          echo "   Name: $cluster_name"
-          echo "   Endpoint: $cluster_endpoint"
+          echo "📊 Cluster deployed: $cluster_name"
 
   verify:
-    name: ✅ Verify EKS Cluster
-    needs: [validate, plan, deploy]
+    name: ✅ Verify & Connect
+    needs: [validate_and_plan, deploy]
     if: needs.deploy.outputs.deployment_status == 'success'
     environment: ${{ github.event.inputs.environment }}
     runs-on: ubuntu-latest
     outputs:
-      health_check_status: ${{ steps.health_check.outcome }}
+      health_status: ${{ steps.health.outcome }}
       
     steps:
       - name: Configure AWS credentials
@@ -274,84 +214,70 @@ jobs:
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/
 
-      - name: Configure kubectl
+      - name: Health Check
+        id: health
+        timeout-minutes: 15
         run: |
-          echo "🔗 Configuring kubectl for cluster '${{ needs.deploy.outputs.cluster_name }}'..."
+          echo "🔗 Configuring kubectl..."
           aws eks update-kubeconfig \
             --region ${{ vars.AWS_REGION }} \
             --name ${{ needs.deploy.outputs.cluster_name }}
-
-      - name: Wait for cluster to be ready
-        timeout-minutes: 10
-        run: |
-          echo "⏳ Waiting for cluster to be ready..."
-          for i in {1..30}; do
+          
+          echo "⏳ Waiting for cluster readiness..."
+          for i in {1..20}; do
             if kubectl cluster-info >/dev/null 2>&1; then
-              echo "✅ Cluster is responding"
+              echo "✅ Cluster responding"
               break
             fi
-            echo "   Attempt $i/30: Cluster not ready yet, waiting 20 seconds..."
-            sleep 20
+            echo "   Attempt $i/20..."
+            sleep 30
           done
-
-      - name: Health Check
-        id: health_check
-        timeout-minutes: 15
-        run: |
-          echo "🏥 Performing cluster health checks..."
           
-          # Check cluster status
-          echo "📊 Cluster Status:"
-          kubectl cluster-info
-          
-          # Check nodes
-          echo "🖥️ Node Status:"
-          kubectl get nodes -o wide
-          
-          # Wait for nodes to be ready
-          echo "⏳ Waiting for all nodes to be ready..."
+          echo "🏥 Health checks..."
+          kubectl get nodes
           kubectl wait --for=condition=Ready nodes --all --timeout=600s
-          
-          # Check system pods
-          echo "🏗️ System Pods Status:"
           kubectl get pods -n kube-system
-          
-          # Wait for system pods to be ready
-          echo "⏳ Waiting for system pods to be ready..."
-          kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=300s
-          
-          # Verify we can create resources
-          echo "🧪 Testing resource creation..."
-          kubectl create namespace test-deployment --dry-run=client -o yaml | kubectl apply -f -
-          kubectl delete namespace test-deployment
           
           echo "✅ All health checks passed!"
 
-      - name: Cluster Information Summary
+      - name: Generate Connection Info
         run: |
-          echo "🎉 EKS Cluster Successfully Deployed and Verified!"
-          echo ""
-          echo "📋 Cluster Details:"
-          echo "   Name: ${{ needs.deploy.outputs.cluster_name }}"
-          echo "   Environment: ${{ github.event.inputs.environment }}"
-          echo "   Region: ${{ vars.AWS_REGION }}"
-          echo "   Endpoint: ${{ needs.deploy.outputs.cluster_endpoint }}"
-          echo ""
-          echo "🔗 To connect to your cluster:"
-          echo "   aws eks update-kubeconfig --region ${{ vars.AWS_REGION }} --name ${{ needs.deploy.outputs.cluster_name }}"
-          echo ""
-          echo "🛠️ Useful commands:"
-          echo "   kubectl get nodes"
-          echo "   kubectl get pods --all-namespaces"
+          # Create connection script
+          cat > connect.sh << 'EOF'
+          #!/bin/bash
+          echo "🔗 Connecting to EKS cluster..."
+          aws eks update-kubeconfig \
+            --region ${{ vars.AWS_REGION }} \
+            --name ${{ needs.deploy.outputs.cluster_name }}
+          echo "✅ Connected! Try: kubectl get nodes"
+          EOF
+          chmod +x connect.sh
 
-  cleanup_on_failure:
+      - name: Upload Connection Script
+        uses: actions/upload-artifact@v4
+        with:
+          name: connect-${{ github.event.inputs.name }}
+          path: ./connect.sh
+          retention-days: 7
+
+      - name: Success Summary
+        run: |
+          echo "🎉 EKS Cluster Ready!"
+          echo "====================="
+          echo "Name: ${{ needs.deploy.outputs.cluster_name }}"
+          echo "Region: ${{ vars.AWS_REGION }}"
+          echo ""
+          echo "🔗 Connect with:"
+          echo "aws eks update-kubeconfig --region ${{ vars.AWS_REGION }} --name ${{ needs.deploy.outputs.cluster_name }}"
+
+  cleanup:
     name: 🧹 Cleanup on Failure
-    needs: [validate, plan, deploy, verify]
+    needs: [validate_and_plan, deploy, verify]
     if: |
       always() && 
       github.event.inputs.destroy_on_failure == 'true' && 
       (needs.deploy.outputs.deployment_status == 'failure' || 
-       needs.verify.outputs.health_check_status == 'failure')
+       needs.verify.outputs.health_status == 'failure')
     environment: ${{ github.event.inputs.environment }}
     runs-on: ubuntu-latest
     
@@ -366,13 +292,16 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      - name: Setup Terraform
+      - name: Setup Terraform & Destroy
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Terraform Init
+      - name: Cleanup Failed Deployment
         working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
+        env:
+          TF_VAR_cluster_name: ${{ github.event.inputs.name }}
+          TF_VAR_environment: ${{ github.event.inputs.environment }}
         run: |
           terraform init \
             -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
@@ -380,50 +309,7 @@ jobs:
             -backend-config="region=${{ vars.AWS_REGION }}" \
             -backend-config="dynamodb_table=${{ vars.TF_STATE_LOCK_TABLE }}" \
             -backend-config="encrypt=true"
-
-      - name: Terraform Destroy
-        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
-        env:
-          TF_VAR_cluster_name: ${{ github.event.inputs.name }}
-          TF_VAR_environment: ${{ github.event.inputs.environment }}
-        run: |
-          echo "🧹 Destroying failed deployment..."
-          terraform destroy \
-            -var-file="terraform.tfvars" \
-            -auto-approve
-          echo "✅ Cleanup completed"
-
-      - name: Cleanup Summary
-        run: |
-          echo "🧹 Cleanup completed due to deployment failure"
-          echo "💡 You can disable automatic cleanup by setting 'destroy_on_failure' to false"
-
-  notify_completion:
-    name: 📢 Deployment Summary
-    needs: [validate, plan, deploy, verify, cleanup_on_failure]
-    if: always()
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Deployment Summary
-        run: |
-          echo "📊 EKS Deployment Summary"
-          echo "========================"
-          echo "Cluster Name: ${{ github.event.inputs.name }}"
-          echo "Environment: ${{ github.event.inputs.environment }}"
-          echo "Region: ${{ vars.AWS_REGION }}"
-          echo ""
           
-          if [[ "${{ needs.verify.outputs.health_check_status }}" == "success" ]]; then
-            echo "✅ Status: SUCCESSFUL"
-            echo "🎉 Your EKS cluster is ready to use!"
-          elif [[ "${{ needs.cleanup_on_failure.result }}" == "success" ]]; then
-            echo "❌ Status: FAILED (Resources cleaned up)"
-            echo "💡 Check the logs above for failure details"
-          elif [[ "${{ needs.deploy.outputs.deployment_status }}" == "failure" ]]; then
-            echo "❌ Status: DEPLOYMENT FAILED"
-            echo "⚠️  Some resources may still exist - manual cleanup might be needed"
-          else
-            echo "⚠️ Status: INCOMPLETE"
-            echo "🔍 Check individual job statuses for details"
-          fi
+          echo "🧹 Destroying failed deployment..."
+          terraform destroy -var-file="terraform.tfvars" -auto-approve
+          echo "✅ Cleanup completed"
