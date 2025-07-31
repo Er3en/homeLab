@@ -76,17 +76,14 @@ jobs:
         id: lock
         uses: ./.github/actions/terraform-lock
         with:
-          command: ${{ github.event.inputs.force-unlock == 'true' && 'force-unlock' || 'check-lock' }}
+          command: force-unlock
           state-bucket: ${{ vars.TF_STATE_BUCKET }}
           state-key: eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
           lock-table: ${{ vars.TF_STATE_LOCK_TABLE }}
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Wait for Lock (if needed)
-        if: |
-          steps.lock.outputs.is-locked == 'true' && 
-          github.event.inputs.action != 'unlock-only' &&
-          github.event.inputs.force-unlock != 'true'
+        if: steps.lock.outputs.is-locked == 'true'
         uses: ./.github/actions/terraform-lock
         with:
           command: wait-for-lock
