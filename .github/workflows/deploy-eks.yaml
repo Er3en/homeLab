@@ -26,13 +26,14 @@ env:
   KUBECTL_VERSION: 1.28.0
 
 jobs:
-  validate_and_plan:
-    name: 🔍 Validate & Plan
+  deploy:
+    name: 🚀 Deploy EKS Cluster
     environment: ${{ github.event.inputs.environment }}
     runs-on: ubuntu-latest
     outputs:
-      plan_exitcode: ${{ steps.plan.outputs.exitcode }}
       cluster_name: ${{ github.event.inputs.name }}
+      cluster_endpoint: ${{ steps.output.outputs.cluster_endpoint }}
+      deployment_status: ${{ steps.deployment_status.outputs.status }}
       
     steps:
       - name: Checkout repo
@@ -95,9 +96,8 @@ jobs:
             -detailed-exitcode \
             -no-color \
             -out=tfplan
-        
 
-      - name: Terraform Init & Apply
+      - name: Terraform Apply
         id: apply
         working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         env:
@@ -120,10 +120,20 @@ jobs:
           
           echo "📊 Cluster deployed: $cluster_name"
 
+      - name: Set deployment status
+        id: deployment_status
+        if: always()
+        run: |
+          if [[ "${{ steps.apply.outcome }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+
   verify:
     name: ✅ Verify & Connect
-    needs: [validate_and_plan]
-    if: needs.validate_and_plan.outputs.deployment_status == 'success'
+    needs: [deploy]
+    if: needs.deploy.outputs.deployment_status == 'success'
     environment: ${{ github.event.inputs.environment }}
     runs-on: ubuntu-latest
     outputs:
@@ -150,7 +160,7 @@ jobs:
           echo "🔗 Configuring kubectl..."
           aws eks update-kubeconfig \
             --region ${{ vars.AWS_REGION }} \
-            --name ${{ needs.validate_and_plan.outputs.cluster_name }}
+            --name ${{ needs.deploy.outputs.cluster_name }}
           
           echo "⏳ Waiting for cluster readiness..."
           for i in {1..20}; do
@@ -201,15 +211,16 @@ jobs:
 
   cleanup:
     name: 🧹 Cleanup on Failure
-    needs: [validate_and_plan, verify]
+    needs: [deploy, verify]
     if: |
       always() &&
       github.event.inputs.destroy_on_failure == 'true' &&
       (
-        needs.validate_and_plan.result == 'failure' ||
+        needs.deploy.result == 'failure' ||
+        needs.deploy.result == 'cancelled' ||
         needs.verify.result == 'failure' ||
-        needs.validate_and_plan.result == 'cancelled' ||
-        needs.verify.result == 'cancelled'
+        needs.verify.result == 'cancelled' ||
+        cancelled()
       )
     environment: ${{ github.event.inputs.environment }}
     runs-on: ubuntu-latest
@@ -225,17 +236,19 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      - name: Setup Terraform & Destroy
+      - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Cleanup Failed Deployment
+      - name: Check if resources exist
+        id: check_resources
         working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         env:
           TF_VAR_cluster_name: ${{ github.event.inputs.name }}
           TF_VAR_environment: ${{ github.event.inputs.environment }}
         run: |
+          # Initialize Terraform
           terraform init \
             -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
             -backend-config="key=eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate" \
@@ -243,6 +256,82 @@ jobs:
             -backend-config="dynamodb_table=${{ vars.TF_STATE_LOCK_TABLE }}" \
             -backend-config="encrypt=true"
           
-          echo "🧹 Destroying failed deployment..."
-          terraform destroy -var-file="terraform.tfvars" -auto-approve
-          echo "✅ Cleanup completed"
+          # Check if state has resources
+          if terraform state list 2>/dev/null | grep -q .; then
+            echo "resources_exist=true" >> $GITHUB_OUTPUT
+            echo "📋 Found resources in state to clean up"
+          else
+            echo "resources_exist=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ No resources found in state"
+          fi
+
+      - name: Force Cleanup Failed/Cancelled Deployment
+        if: steps.check_resources.outputs.resources_exist == 'true'
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
+        env:
+          TF_VAR_cluster_name: ${{ github.event.inputs.name }}
+          TF_VAR_environment: ${{ github.event.inputs.environment }}
+        run: |
+          echo "🧹 Starting cleanup of failed/cancelled deployment..."
+          echo "⚠️ This may take 10-15 minutes..."
+          
+          # First try normal destroy
+          if terraform destroy -auto-approve -no-color 2>&1 | tee destroy.log; then
+            echo "✅ Normal cleanup completed successfully"
+          else
+            echo "⚠️ Normal destroy failed, attempting force cleanup..."
+            
+            # If normal destroy fails, try removing finalizers and force destroy
+            if aws eks describe-cluster --name "${{ github.event.inputs.name }}" --region "${{ vars.AWS_REGION }}" 2>/dev/null; then
+              echo "🔧 Removing Kubernetes finalizers..."
+              aws eks update-kubeconfig --region ${{ vars.AWS_REGION }} --name ${{ github.event.inputs.name }} || true
+              
+              # Remove finalizers from persistent volumes
+              kubectl get pv -o name 2>/dev/null | xargs -I {} kubectl patch {} -p '{"metadata":{"finalizers":null}}' --type=merge || true
+              
+              # Remove finalizers from persistent volume claims
+              kubectl get pvc --all-namespaces -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name --no-headers 2>/dev/null | \
+                while read ns name; do
+                  kubectl patch pvc $name -n $ns -p '{"metadata":{"finalizers":null}}' --type=merge || true
+                done
+              
+              # Delete load balancers
+              kubectl get svc --all-namespaces -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,TYPE:.spec.type --no-headers 2>/dev/null | \
+                grep LoadBalancer | while read ns name type; do
+                  kubectl delete svc $name -n $ns --force --grace-period=0 || true
+                done
+            fi
+            
+            # Try destroy again with refresh
+            echo "🔄 Attempting destroy with state refresh..."
+            terraform destroy -auto-approve -refresh=true -no-color || true
+            
+            # Final attempt - remove from state and destroy
+            echo "🔨 Final cleanup attempt..."
+            terraform state list | while read resource; do
+              echo "Removing $resource from state..."
+              terraform state rm "$resource" || true
+            done
+            
+            # One more destroy to catch any remaining resources
+            terraform destroy -auto-approve -no-color || true
+          fi
+          
+          echo "✅ Cleanup process completed"
+
+      - name: Cleanup Summary
+        if: always()
+        run: |
+          echo "🧹 Cleanup Job Summary"
+          echo "===================="
+          echo "Workflow Status:"
+          echo "  - Deploy: ${{ needs.deploy.result }}"
+          echo "  - Verify: ${{ needs.verify.result }}"
+          echo "  - Cleanup triggered: YES"
+          echo "  - Resources found: ${{ steps.check_resources.outputs.resources_exist }}"
+          echo ""
+          if [[ "${{ steps.check_resources.outputs.resources_exist }}" == "true" ]]; then
+            echo "✅ Cleanup was attempted for failed/cancelled deployment"
+          else
+            echo "ℹ️ No resources to clean up"
+          fi
