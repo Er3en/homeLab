@@ -72,34 +72,34 @@ jobs:
             fi
           fi
 
-      - name: Handle State Lock
-        id: lock
-        uses: ./.github/actions/terraform-lock
-        with:
-          command: force-unlock
-          state-bucket: ${{ vars.TF_STATE_BUCKET }}
-          state-key: cluster-eks-jarybski/eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
-          lock-table: ${{ vars.TF_STATE_LOCK_TABLE }}
-          aws-region: ${{ vars.AWS_REGION }}
+      # - name: Handle State Lock
+      #   id: lock
+      #   uses: ./.github/actions/terraform-lock
+      #   with:
+      #     command: force-unlock
+      #     state-bucket: ${{ vars.TF_STATE_BUCKET }}
+      #     state-key: cluster-eks-jarybski/eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
+      #     lock-table: ${{ vars.TF_STATE_LOCK_TABLE }}
+      #     aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Wait for Lock (if needed)
-        if: steps.lock.outputs.is-locked == 'true'
-        uses: ./.github/actions/terraform-lock
-        with:
-          command: wait-for-lock
-          state-bucket: ${{ vars.TF_STATE_BUCKET }}
-          state-key: cluster-eks-jarybski/eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
-          lock-table: ${{ vars.TF_STATE_LOCK_TABLE }}
-          aws-region: ${{ vars.AWS_REGION }}
-          max-wait-minutes: '10'
-          force-after-minutes: '30'
+      # - name: Wait for Lock (if needed)
+      #   if: steps.lock.outputs.is-locked == 'true'
+      #   uses: ./.github/actions/terraform-lock
+      #   with:
+      #     command: wait-for-lock
+      #     state-bucket: ${{ vars.TF_STATE_BUCKET }}
+      #     state-key: cluster-eks-jarybski/eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
+      #     lock-table: ${{ vars.TF_STATE_LOCK_TABLE }}
+      #     aws-region: ${{ vars.AWS_REGION }}
+      #     max-wait-minutes: '10'
+      #     force-after-minutes: '30'
 
-      - name: Exit if Unlock Only
-        if: github.event.inputs.action == 'unlock-only'
-        run: |
-          echo "✅ Lock handling completed"
-          echo "Current lock status: ${{ steps.lock.outputs.is-locked }}"
-          exit 0
+      # - name: Exit if Unlock Only
+      #   if: github.event.inputs.action == 'unlock-only'
+      #   run: |
+      #     echo "✅ Lock handling completed"
+      #     echo "Current lock status: ${{ steps.lock.outputs.is-locked }}"
+      #     exit 0
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
