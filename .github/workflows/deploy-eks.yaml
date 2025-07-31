@@ -108,7 +108,7 @@ jobs:
 
       - name: test
         run: |
-          LOCK_ID=eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
+          LOCK_ID=cluster-eks-jarybski/eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
           terraform force-unlock $LOCK_ID
 
       - name: Terraform Init
@@ -116,7 +116,7 @@ jobs:
         run: |
           terraform init \
             -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
-            -backend-config="key=eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate" \
+            -backend-config="key=cluster-eks-jarybski/eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate" \
             -backend-config="region=${{ vars.AWS_REGION }}" \
             -backend-config="dynamodb_table=${{ vars.TF_STATE_LOCK_TABLE }}" \
             -backend-config="encrypt=true" \
