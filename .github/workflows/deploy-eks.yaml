@@ -74,12 +74,30 @@ jobs:
         working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         run: |
           echo "🚀 Initializing Terraform..."
+          
+          # First check for and handle any existing locks
+          STATE_PATH="eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate"
+          LOCK_TABLE="${{ vars.TF_STATE_LOCK_TABLE }}"
+          
+          # Try to get lock info
+          LOCK_EXISTS=$(aws dynamodb get-item \
+            --table-name "$LOCK_TABLE" \
+            --key "{\"LockID\": {\"S\": \"${{ vars.TF_STATE_BUCKET }}/${STATE_PATH}-md5\"}}" \
+            --region ${{ vars.AWS_REGION }} \
+            2>/dev/null | jq -r '.Item // empty')
+          
+          if [[ -n "$LOCK_EXISTS" ]]; then
+            echo "⚠️ Warning: State lock exists, but proceeding with init..."
+          fi
+          
           terraform init \
             -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
             -backend-config="key=eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate" \
             -backend-config="region=${{ vars.AWS_REGION }}" \
             -backend-config="dynamodb_table=${{ vars.TF_STATE_LOCK_TABLE }}" \
-            -backend-config="encrypt=true"
+            -backend-config="encrypt=true" \
+            -upgrade \
+            -reconfigure
           
           echo "✅ Validating Terraform..."
           terraform validate
@@ -241,6 +259,73 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      - name: Handle State Lock
+        id: handle_lock
+        run: |
+          echo "🔓 Checking for state lock..."
+          
+          # Get lock table and state path from backend config
+          LOCK_TABLE="${{ vars.TF_STATE_LOCK_TABLE }}"
+          STATE_PATH="eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate"
+          
+          # Check if lock exists
+          LOCK_INFO=$(aws dynamodb get-item \
+            --table-name "$LOCK_TABLE" \
+            --key "{\"LockID\": {\"S\": \"${{ vars.TF_STATE_BUCKET }}/${STATE_PATH}-md5\"}}" \
+            --region ${{ vars.AWS_REGION }} \
+            2>/dev/null || echo "{}")
+          
+          if echo "$LOCK_INFO" | jq -e '.Item' > /dev/null; then
+            echo "⚠️ Found existing state lock"
+            
+            # Extract lock details
+            LOCK_ID=$(echo "$LOCK_INFO" | jq -r '.Item.Info.S' | jq -r '.ID // empty' || echo "unknown")
+            LOCK_WHO=$(echo "$LOCK_INFO" | jq -r '.Item.Info.S' | jq -r '.Who // empty' || echo "unknown")
+            LOCK_CREATED=$(echo "$LOCK_INFO" | jq -r '.Item.Info.S' | jq -r '.Created // empty' || echo "unknown")
+            
+            echo "Lock ID: $LOCK_ID"
+            echo "Locked by: $LOCK_WHO"
+            echo "Created: $LOCK_CREATED"
+            
+            # Calculate lock age
+            if [[ "$LOCK_CREATED" != "unknown" ]]; then
+              LOCK_TIMESTAMP=$(date -d "${LOCK_CREATED}" +%s 2>/dev/null || echo 0)
+              CURRENT_TIMESTAMP=$(date +%s)
+              LOCK_AGE=$((CURRENT_TIMESTAMP - LOCK_TIMESTAMP))
+              LOCK_AGE_MINUTES=$((LOCK_AGE / 60))
+              
+              echo "Lock age: ${LOCK_AGE_MINUTES} minutes"
+              
+              # Force unlock if lock is older than 30 minutes or from a failed/cancelled run
+              if [[ $LOCK_AGE_MINUTES -gt 30 ]] || [[ "${{ github.event.inputs.destroy_on_failure }}" == "true" ]]; then
+                echo "🔓 Force unlocking state (lock is ${LOCK_AGE_MINUTES} minutes old)..."
+                aws dynamodb delete-item \
+                  --table-name "$LOCK_TABLE" \
+                  --key "{\"LockID\": {\"S\": \"${{ vars.TF_STATE_BUCKET }}/${STATE_PATH}-md5\"}}" \
+                  --region ${{ vars.AWS_REGION }}
+                echo "✅ State lock removed"
+                echo "lock_removed=true" >> $GITHUB_OUTPUT
+              else
+                echo "❌ Lock is recent (${LOCK_AGE_MINUTES} minutes old), manual intervention required"
+                echo "lock_removed=false" >> $GITHUB_OUTPUT
+              fi
+            else
+              # If we can't determine age, remove it in cleanup context
+              if [[ "${{ github.event.inputs.destroy_on_failure }}" == "true" ]]; then
+                echo "🔓 Force unlocking state (cleanup mode)..."
+                aws dynamodb delete-item \
+                  --table-name "$LOCK_TABLE" \
+                  --key "{\"LockID\": {\"S\": \"${{ vars.TF_STATE_BUCKET }}/${STATE_PATH}-md5\"}}" \
+                  --region ${{ vars.AWS_REGION }}
+                echo "✅ State lock removed"
+                echo "lock_removed=true" >> $GITHUB_OUTPUT
+              fi
+            fi
+          else
+            echo "✅ No state lock found"
+            echo "lock_removed=na" >> $GITHUB_OUTPUT
+          fi
+
       - name: Check if resources exist
         id: check_resources
         working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
@@ -275,18 +360,34 @@ jobs:
           echo "🧹 Starting cleanup of failed/cancelled deployment..."
           echo "⚠️ This may take 10-15 minutes..."
           
-          # First try normal destroy
-          if terraform destroy -auto-approve -no-color 2>&1 | tee destroy.log; then
+          # First try normal destroy with lock timeout
+          echo "🔄 Attempting normal cleanup..."
+          if terraform destroy -auto-approve -no-color -lock-timeout=5m 2>&1 | tee destroy.log; then
             echo "✅ Normal cleanup completed successfully"
           else
-            echo "⚠️ Normal destroy failed, attempting force cleanup..."
+            echo "⚠️ Normal destroy failed, checking for common issues..."
+            
+            # Check if it's a lock error
+            if grep -q "Error acquiring the state lock" destroy.log; then
+              echo "🔓 State lock detected, attempting force unlock..."
+              
+              # Force unlock using terraform
+              terraform force-unlock -force ${{ steps.handle_lock.outputs.lock_id || 'unknown' }} || true
+              
+              # Retry destroy with lock flag
+              echo "🔄 Retrying destroy without lock..."
+              terraform destroy -auto-approve -no-color -lock=false || true
+            fi
             
             # If normal destroy fails, try removing finalizers and force destroy
             if aws eks describe-cluster --name "${{ github.event.inputs.name }}" --region "${{ vars.AWS_REGION }}" 2>/dev/null; then
-              echo "🔧 Removing Kubernetes finalizers..."
+              echo "🔧 Cluster still exists, attempting manual cleanup..."
+              
+              # Update kubeconfig
               aws eks update-kubeconfig --region ${{ vars.AWS_REGION }} --name ${{ github.event.inputs.name }} || true
               
               # Remove finalizers from persistent volumes
+              echo "📋 Cleaning up Kubernetes resources..."
               kubectl get pv -o name 2>/dev/null | xargs -I {} kubectl patch {} -p '{"metadata":{"finalizers":null}}' --type=merge || true
               
               # Remove finalizers from persistent volume claims
@@ -300,13 +401,33 @@ jobs:
                 grep LoadBalancer | while read ns name type; do
                   kubectl delete svc $name -n $ns --force --grace-period=0 || true
                 done
+              
+              # Delete ingresses
+              kubectl get ingress --all-namespaces -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name --no-headers 2>/dev/null | \
+                while read ns name; do
+                  kubectl delete ingress $name -n $ns --force --grace-period=0 || true
+                done
             fi
             
-            # Try destroy again with refresh
+            # Try destroy again with refresh and without lock
             echo "🔄 Attempting destroy with state refresh..."
-            terraform destroy -auto-approve -refresh=true -no-color || true
+            terraform destroy -auto-approve -refresh=true -no-color -lock=false || true
             
-            # Final attempt - remove from state and destroy
+            # If still failing, try to manually clean AWS resources
+            echo "🔨 Attempting manual AWS resource cleanup..."
+            
+            # Delete node groups
+            aws eks list-nodegroups --cluster-name ${{ github.event.inputs.name }} --region ${{ vars.AWS_REGION }} --query 'nodegroups[]' --output text 2>/dev/null | \
+              xargs -n1 -I {} aws eks delete-nodegroup --cluster-name ${{ github.event.inputs.name }} --nodegroup-name {} --region ${{ vars.AWS_REGION }} || true
+            
+            # Wait for node groups to delete
+            echo "⏳ Waiting for node groups to delete..."
+            aws eks wait nodegroup-deleted --cluster-name ${{ github.event.inputs.name }} --region ${{ vars.AWS_REGION }} || true
+            
+            # Delete the cluster
+            aws eks delete-cluster --name ${{ github.event.inputs.name }} --region ${{ vars.AWS_REGION }} || true
+            
+            # Final attempt - remove from state and destroy remaining resources
             echo "🔨 Final cleanup attempt..."
             terraform state list | while read resource; do
               echo "Removing $resource from state..."
@@ -314,7 +435,7 @@ jobs:
             done
             
             # One more destroy to catch any remaining resources
-            terraform destroy -auto-approve -no-color || true
+            terraform destroy -auto-approve -no-color -lock=false || true
           fi
           
           echo "✅ Cleanup process completed"
