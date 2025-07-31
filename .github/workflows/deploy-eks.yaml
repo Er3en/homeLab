@@ -110,6 +110,7 @@ jobs:
         run: |
           LOCK_ID=cluster-eks-jarybski/eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
           terraform force-unlock $LOCK_ID
+        continue-on-error: true
 
       - name: Terraform Init
         working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
