@@ -78,7 +78,7 @@ jobs:
         with:
           command: force-unlock
           state-bucket: ${{ vars.TF_STATE_BUCKET }}
-          state-key: eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
+          state-key: cluster-eks-jarybski/eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
           lock-table: ${{ vars.TF_STATE_LOCK_TABLE }}
           aws-region: ${{ vars.AWS_REGION }}
 
@@ -88,7 +88,7 @@ jobs:
         with:
           command: wait-for-lock
           state-bucket: ${{ vars.TF_STATE_BUCKET }}
-          state-key: eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
+          state-key: cluster-eks-jarybski/eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
           lock-table: ${{ vars.TF_STATE_LOCK_TABLE }}
           aws-region: ${{ vars.AWS_REGION }}
           max-wait-minutes: '10'
@@ -245,7 +245,7 @@ jobs:
         with:
           command: force-unlock
           state-bucket: ${{ vars.TF_STATE_BUCKET }}
-          state-key: eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
+          state-key: cluster-eks-jarybski/eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
           lock-table: ${{ vars.TF_STATE_LOCK_TABLE }}
           aws-region: ${{ vars.AWS_REGION }}
 
