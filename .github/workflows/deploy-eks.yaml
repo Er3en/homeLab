@@ -110,7 +110,7 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
-        working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         run: |
           terraform init \
             -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
@@ -122,7 +122,7 @@ jobs:
 
       - name: Terraform Plan
         if: github.event.inputs.action == 'deploy'
-        working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         env:
           TF_VAR_cluster_name: ${{ github.event.inputs.name }}
           TF_VAR_environment: ${{ github.event.inputs.environment }}
@@ -131,7 +131,7 @@ jobs:
 
       - name: Terraform Apply
         if: github.event.inputs.action == 'deploy'
-        working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         env:
           TF_VAR_cluster_name: ${{ github.event.inputs.name }}
           TF_VAR_environment: ${{ github.event.inputs.environment }}
@@ -140,7 +140,7 @@ jobs:
 
       - name: Terraform Destroy
         if: github.event.inputs.action == 'destroy'
-        working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         env:
           TF_VAR_cluster_name: ${{ github.event.inputs.name }}
           TF_VAR_environment: ${{ github.event.inputs.environment }}
@@ -168,7 +168,7 @@ jobs:
       - name: Save Outputs
         if: github.event.inputs.action == 'deploy' && success()
         id: outputs
-        working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+        working-directory: ./cluster/terraform/environments/${{ github.event.inputs.environment }}
         run: |
           # Get outputs
           CLUSTER_ENDPOINT=$(terraform output -raw cluster_endpoint 2>/dev/null || echo "")
