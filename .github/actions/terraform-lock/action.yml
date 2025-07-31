@@ -49,6 +49,8 @@ runs:
         LOCK_ID="${{ inputs.state-bucket }}/${{ inputs.state-key }}-md5"
         
         echo "🔍 Checking lock status..."
+        echo "Lock ID: $LOCK_ID"
+        
         LOCK_INFO=$(aws dynamodb get-item \
           --table-name "${{ inputs.lock-table }}" \
           --key "{\"LockID\": {\"S\": \"$LOCK_ID\"}}" \
@@ -73,10 +75,14 @@ runs:
             AGE_MINUTES=$(( (NOW_TS - CREATED_TS) / 60 ))
             echo "lock-age=$AGE_MINUTES" >> $GITHUB_OUTPUT
             
-            echo "🔒 Locked by: $WHO"
-            echo "⏰ Lock age: $AGE_MINUTES minutes"
+            echo "🔒 State is locked"
+            echo "   Locked by: $WHO"
+            echo "   Lock ID: $ID"
+            echo "   Created: $CREATED"
+            echo "   Age: $AGE_MINUTES minutes"
           else
             echo "lock-age=unknown" >> $GITHUB_OUTPUT
+            echo "🔒 State is locked (unknown age)"
           fi
         else
           echo "is-locked=false" >> $GITHUB_OUTPUT
@@ -84,14 +90,62 @@ runs:
           echo "✅ State is not locked"
         fi
 
+    - name: Force Unlock Old Lock
+      if: |
+        inputs.command == 'force-unlock' && 
+        steps.check.outputs.is-locked == 'true' &&
+        steps.check.outputs.lock-age != 'unknown' &&
+        steps.check.outputs.lock-age >= inputs.force-after-minutes
+      shell: bash
+      run: |
+        echo "⚠️ Lock is ${{ steps.check.outputs.lock-age }} minutes old (threshold: ${{ inputs.force-after-minutes }} minutes)"
+        echo "🔓 Auto-removing stale lock..."
+        
+        LOCK_ID="${{ inputs.state-bucket }}/${{ inputs.state-key }}-md5"
+        aws dynamodb delete-item \
+          --table-name "${{ inputs.lock-table }}" \
+          --key "{\"LockID\": {\"S\": \"$LOCK_ID\"}}" \
+          --region "${{ inputs.aws-region }}" || true
+        
+        echo "✅ Stale lock removed"
+
+    - name: Force Unlock (Manual)
+      if: |
+        inputs.command == 'force-unlock' && 
+        steps.check.outputs.is-locked == 'true' &&
+        (steps.check.outputs.lock-age == 'unknown' || steps.check.outputs.lock-age < inputs.force-after-minutes)
+      shell: bash
+      run: |
+        echo "🔓 Force unlocking state (manual request)..."
+        echo "   Current lock age: ${{ steps.check.outputs.lock-age }} minutes"
+        
+        LOCK_ID="${{ inputs.state-bucket }}/${{ inputs.state-key }}-md5"
+        aws dynamodb delete-item \
+          --table-name "${{ inputs.lock-table }}" \
+          --key "{\"LockID\": {\"S\": \"$LOCK_ID\"}}" \
+          --region "${{ inputs.aws-region }}" || true
+        
+        echo "✅ Lock removed"
+
+    - name: No Lock to Remove
+      if: |
+        inputs.command == 'force-unlock' && 
+        steps.check.outputs.is-locked != 'true'
+      shell: bash
+      run: |
+        echo "ℹ️ No lock found to remove"
+
     - name: Wait for Lock
-      if: inputs.command == 'wait-for-lock' && steps.check.outputs.is-locked == 'true'
+      if: |
+        inputs.command == 'wait-for-lock' && 
+        steps.check.outputs.is-locked == 'true'
       shell: bash
       run: |
         MAX_WAIT=$(( ${{ inputs.max-wait-minutes }} * 60 ))
         ELAPSED=0
         
         echo "⏳ Waiting up to ${{ inputs.max-wait-minutes }} minutes for lock release..."
+        echo "   Current lock held by: ${{ steps.check.outputs.lock-who }}"
         
         while [[ $ELAPSED -lt $MAX_WAIT ]]; do
           sleep 10
@@ -106,35 +160,12 @@ runs:
             2>/dev/null || echo "{}")
           
           if ! echo "$LOCK_CHECK" | jq -e '.Item' > /dev/null; then
-            echo "✅ Lock released!"
+            echo "✅ Lock released after $ELAPSED seconds!"
             exit 0
           fi
           
-          echo "Still waiting... ($ELAPSED seconds)"
+          echo "   Still waiting... ($ELAPSED/$MAX_WAIT seconds)"
         done
         
-        echo "❌ Timeout waiting for lock"
+        echo "❌ Timeout waiting for lock after ${{ inputs.max-wait-minutes }} minutes"
         exit 1
-
-    - name: Force Unlock
-      if: |
-        inputs.command == 'force-unlock' || 
-        (inputs.command == 'wait-for-lock' && 
-         steps.check.outputs.is-locked == 'true' && 
-         steps.check.outputs.lock-age != 'unknown' &&
-         steps.check.outputs.lock-age >= inputs.force-after-minutes)
-      shell: bash
-      run: |
-        if [[ "${{ steps.check.outputs.lock-age }}" -ge "${{ inputs.force-after-minutes }}" ]]; then
-          echo "🔓 Lock is ${{ steps.check.outputs.lock-age }} minutes old, force unlocking..."
-        else
-          echo "🔓 Force unlocking state..."
-        fi
-        
-        LOCK_ID="${{ inputs.state-bucket }}/${{ inputs.state-key }}-md5"
-        aws dynamodb delete-item \
-          --table-name "${{ inputs.lock-table }}" \
-          --key "{\"LockID\": {\"S\": \"$LOCK_ID\"}}" \
-          --region "${{ inputs.aws-region }}" || true
-        
-        echo "✅ Lock removed"
