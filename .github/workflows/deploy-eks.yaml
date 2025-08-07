@@ -1,68 +1,137 @@
-name: 'Terraform Lock Handler'
-description: 'Handles Terraform state lock/unlock/wait'
-runs:
-  using: 'composite'
-  steps:
-    - name: Check and Handle Lock
-      id: lock
-      shell: bash
-      run: |
-        ACTION="${{ inputs.action }}"
-        STATE_KEY="${{ inputs.state-key }}"
-        REGION="${{ inputs.region }}"
-        TABLE="${{ inputs.table }}"
-        BUCKET="${{ inputs.bucket }}"
+name: Deploy EKS
 
-        echo "🔒 Terraform lock handler - action: $ACTION"
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "EKS cluster name"
+        required: true
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options: [dev, staging, prod]
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'deploy'
+        type: choice
+        options: [deploy, destroy, unlock-only]
+      force-unlock:
+        description: 'Force unlock stuck state before operation'
+        required: false
+        default: false
+        type: boolean
 
-        if [[ "$ACTION" == "unlock-only" || "$ACTION" == "force-unlock" ]]; then
-          echo "🔓 Forcing unlock of state: $STATE_KEY"
-          aws dynamodb delete-item \
-            --table-name "$TABLE" \
-            --key "{\"LockID\": {\"S\": \"$STATE_KEY\"}}" \
-            --region "$REGION" || true
-          exit 0
-        fi
+env:
+  TF_VERSION: 1.9.0
+  KUBECTL_VERSION: 1.28.0
 
-        # Wait loop
-        MAX_WAIT_MINUTES=10
-        WAITED=0
+concurrency:
+  group: eks-${{ github.event.inputs.environment }}-${{ github.event.inputs.name }}
+  cancel-in-progress: false
 
-        while aws dynamodb get-item \
-          --table-name "$TABLE" \
-          --key "{\"LockID\": {\"S\": \"$STATE_KEY\"}}" \
-          --region "$REGION" | jq -e '.Item' > /dev/null; do
+jobs:
+  eks:
+    name: ${{ github.event.inputs.action == 'destroy' && '🗑️ Destroy' || github.event.inputs.action == 'unlock-only' && '🔓 Unlock' || '🚀 Deploy' }} EKS
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
 
-          echo "⏳ Lock still held. Waiting... (${WAITED}/${MAX_WAIT_MINUTES} mins)"
-          sleep 30
-          WAITED=$((WAITED+1))
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-          if [[ "$WAITED" -ge "$((MAX_WAIT_MINUTES * 2))" ]]; then
-            echo "❌ Timeout waiting for lock."
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Validate Inputs
+        if: ${{ github.event.inputs.action != 'unlock-only' }}
+        run: |
+          if [[ ! "${{ github.event.inputs.name }}" =~ ^[a-zA-Z][a-zA-Z0-9-]*[a-zA-Z0-9]$ ]]; then
+            echo "❌ Invalid cluster name"
             exit 1
           fi
-        done
 
-        echo "✅ Lock released or not held"
-        exit 0
+      - name: Handle Lock
+        uses: ./.github/actions/terraform-lock-handler
+        with:
+          action: ${{ github.event.inputs.action }}
+          state-key: cluster-eks-jarybski/eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
+          bucket: ${{ vars.TF_STATE_BUCKET }}
+          table: ${{ vars.TF_STATE_LOCK_TABLE }}
+          region: ${{ vars.AWS_REGION }}
+          force-unlock: ${{ github.event.inputs.force-unlock }}
 
-inputs:
-  action:
-    description: 'deploy | destroy | unlock-only | force-unlock'
-    required: true
-  state-key:
-    description: 'Terraform state file key'
-    required: true
-  region:
-    description: 'AWS region'
-    required: true
-  table:
-    description: 'DynamoDB lock table'
-    required: true
-  bucket:
-    description: 'S3 bucket (unused for now)'
-    required: false
-  force-unlock:
-    description: 'Force unlock stuck state before action'
-    required: false
-    default: false
+      - name: Exit if Unlock Only
+        if: ${{ github.event.inputs.action == 'unlock-only' }}
+        run: echo "🔓 Unlock-only mode completed. Exiting..."
+
+      - name: Run Terraform
+        if: ${{ github.event.inputs.action != 'unlock-only' }}
+        uses: ./.github/actions/terraform-runner
+        with:
+          action: ${{ github.event.inputs.action }}
+          cluster_name: ${{ github.event.inputs.name }}
+          environment: ${{ github.event.inputs.environment }}
+          terraform_version: ${{ env.TF_VERSION }}
+          backend_bucket: ${{ vars.TF_STATE_BUCKET }}
+          backend_key: cluster-eks-jarybski/eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
+          backend_region: ${{ vars.AWS_REGION }}
+          backend_table: ${{ vars.TF_STATE_LOCK_TABLE }}
+
+      - name: Generate Connect Script
+        if: ${{ github.event.inputs.action == 'deploy' }}
+        run: |
+          cat > connect.sh <<EOF
+          #!/bin/bash
+          aws eks update-kubeconfig --region ${{ vars.AWS_REGION }} --name ${{ github.event.inputs.name }}
+          kubectl cluster-info
+          EOF
+          chmod +x connect.sh
+
+      - name: Upload Connect Script
+        if: ${{ github.event.inputs.action == 'deploy' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: eks-connection-${{ github.event.inputs.name }}
+          path: connect.sh
+          retention-days: 7
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "# Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Action: ${{ github.event.inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Cluster: ${{ github.event.inputs.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Environment: ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+
+  cleanup-on-cancel:
+    name: 🧹 Cleanup on Cancel
+    if: cancelled()
+    needs: eks
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Force Unlock
+        uses: ./.github/actions/terraform-lock-handler
+        with:
+          action: force-unlock
+          state-key: cluster-eks-jarybski/eks/${{ github.event.inputs.environment }}/${{ github.event.inputs.name }}/terraform.tfstate
+          bucket: ${{ vars.TF_STATE_BUCKET }}
+          table: ${{ vars.TF_STATE_LOCK_TABLE }}
+          region: ${{ vars.AWS_REGION }}

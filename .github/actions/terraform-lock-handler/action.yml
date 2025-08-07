@@ -1,144 +1,68 @@
-# .github/actions/terraform-lock/action.yml
 name: 'Terraform Lock Handler'
-description: 'Handles Terraform state locks - check, wait, unlock'
-author: 'Your Team'
-
-inputs:
-  command:
-    description: 'Command: check-lock, wait-for-lock, force-unlock'
-    required: true
-  state-bucket:
-    description: 'S3 bucket for state'
-    required: true
-  state-key:
-    description: 'S3 key for state file'
-    required: true
-  lock-table:
-    description: 'DynamoDB table for locks'
-    required: true
-  aws-region:
-    description: 'AWS region'
-    required: true
-  max-wait-minutes:
-    description: 'Max wait time for lock (minutes)'
-    required: false
-    default: '10'
-  force-after-minutes:
-    description: 'Force unlock if lock older than X minutes'
-    required: false
-    default: '30'
-
-outputs:
-  is-locked:
-    description: 'Is state currently locked'
-    value: ${{ steps.check.outputs.is-locked }}
-  lock-id:
-    description: 'Lock ID if locked'
-    value: ${{ steps.check.outputs.lock-id }}
-  lock-age:
-    description: 'Lock age in minutes'
-    value: ${{ steps.check.outputs.lock-age }}
-
+description: 'Handles Terraform state lock/unlock/wait'
 runs:
   using: 'composite'
   steps:
-    - name: Check Lock
-      id: check
+    - name: Check and Handle Lock
+      id: lock
       shell: bash
       run: |
-        LOCK_ID="${{ inputs.state-key }}"
-        
-        echo "🔍 Checking lock status..."
-        echo "Lock ID: $LOCK_ID"
-        
-        LOCK_INFO=$(aws dynamodb get-item \
-          --table-name "${{ inputs.lock-table }}" \
-          --key "{\"LockID\": {\"S\": \"$LOCK_ID\"}}" \
-          --region "${{ inputs.aws-region }}" \
-          2>/dev/null || echo "{}")
-        
-        if echo "$LOCK_INFO" | jq -e '.Item' > /dev/null; then
-          echo "is-locked=true" >> $GITHUB_OUTPUT
-          
-          # Parse lock info
-          INFO=$(echo "$LOCK_INFO" | jq -r '.Item.Info.S')
-          ID=$(echo "$INFO" | jq -r '.ID // "unknown"')
-          WHO=$(echo "$INFO" | jq -r '.Who // "unknown"')
-          CREATED=$(echo "$INFO" | jq -r '.Created // "unknown"')
-          
-          echo "lock-id=$ID" >> $GITHUB_OUTPUT
-          
-          # Calculate age
-          if [[ "$CREATED" != "unknown" ]]; then
-            CREATED_TS=$(date -d "$CREATED" +%s 2>/dev/null || echo 0)
-            NOW_TS=$(date +%s)
-            AGE_MINUTES=$(( (NOW_TS - CREATED_TS) / 60 ))
-            echo "lock-age=$AGE_MINUTES" >> $GITHUB_OUTPUT
-            
-            echo "🔒 State is locked"
-            echo "   Locked by: $WHO"
-            echo "   Lock ID: $ID"
-            echo "   Created: $CREATED"
-            echo "   Age: $AGE_MINUTES minutes"
-          else
-            echo "lock-age=unknown" >> $GITHUB_OUTPUT
-            echo "🔒 State is locked (unknown age)"
-          fi
-        else
-          echo "is-locked=false" >> $GITHUB_OUTPUT
-          echo "lock-age=0" >> $GITHUB_OUTPUT
-          echo "✅ State is not locked"
+        ACTION="${{ inputs.action }}"
+        STATE_KEY="${{ inputs.state-key }}"
+        REGION="${{ inputs.region }}"
+        TABLE="${{ inputs.table }}"
+        BUCKET="${{ inputs.bucket }}"
+
+        echo "🔒 Terraform lock handler - action: $ACTION"
+
+        if [[ "$ACTION" == "unlock-only" || "$ACTION" == "force-unlock" ]]; then
+          echo "🔓 Forcing unlock of state: $STATE_KEY"
+          aws dynamodb delete-item \
+            --table-name "$TABLE" \
+            --key "{\"LockID\": {\"S\": \"$STATE_KEY\"}}" \
+            --region "$REGION" || true
+          exit 0
         fi
 
-    - name: Force Unlock Old Lock
-      if: inputs.command == 'force-unlock' 
-      shell: bash
-      run: |
-        echo "⚠️ Lock is ${{ steps.check.outputs.lock-age }} minutes old (threshold: ${{ inputs.force-after-minutes }} minutes)"
-        echo "🔓 Auto-removing stale lock..."
+        # Wait loop
+        MAX_WAIT_MINUTES=10
+        WAITED=0
 
-        echo "Lock info:"
-        echo "$LOCK_INFO" | jq -r '.Item.Info.S' | jq .
-        
-        LOCK_ID="${{ inputs.state-key }}"
-        aws dynamodb delete-item \
-          --table-name "${{ inputs.lock-table }}" \
-          --key "{\"LockID\": {\"S\": \"$LOCK_ID\"}}" \
-          --region "${{ inputs.aws-region }}" || true
-        
-        echo "✅ Stale lock removed"
+        while aws dynamodb get-item \
+          --table-name "$TABLE" \
+          --key "{\"LockID\": {\"S\": \"$STATE_KEY\"}}" \
+          --region "$REGION" | jq -e '.Item' > /dev/null; do
 
-    - name: Wait for Lock
-      if: |
-        inputs.command == 'wait-for-lock' && 
-        steps.check.outputs.is-locked == 'true'
-      shell: bash
-      run: |
-        MAX_WAIT=$(( ${{ inputs.max-wait-minutes }} * 60 ))
-        ELAPSED=0
-        
-        echo "⏳ Waiting up to ${{ inputs.max-wait-minutes }} minutes for lock release..."
-        echo "   Current lock held by: ${{ steps.check.outputs.lock-who }}"
-        
-        while [[ $ELAPSED -lt $MAX_WAIT ]]; do
-          sleep 10
-          ELAPSED=$((ELAPSED + 10))
-          
-          # Check if still locked
-          LOCK_ID="${{ inputs.state-key }}"
-          LOCK_CHECK=$(aws dynamodb get-item \
-            --table-name "${{ inputs.lock-table }}" \
-            --key "{\"LockID\": {\"S\": \"$LOCK_ID\"}}" \
-            --region "${{ inputs.aws-region }}" \
-            2>/dev/null || echo "{}")
-          
-          if ! echo "$LOCK_CHECK" | jq -e '.Item' > /dev/null; then
-            echo "✅ Lock released after $ELAPSED seconds!"
-            exit 0
+          echo "⏳ Lock still held. Waiting... (${WAITED}/${MAX_WAIT_MINUTES} mins)"
+          sleep 30
+          WAITED=$((WAITED+1))
+
+          if [[ "$WAITED" -ge "$((MAX_WAIT_MINUTES * 2))" ]]; then
+            echo "❌ Timeout waiting for lock."
+            exit 1
           fi
-          
-          echo "   Still waiting... ($ELAPSED/$MAX_WAIT seconds)"
         done
-        
-        echo "❌ Timeout waiting for lock after ${{ inputs.max-wait-minutes }} minutes"
-        exit 1
+
+        echo "✅ Lock released or not held"
+        exit 0
+
+inputs:
+  action:
+    description: 'deploy | destroy | unlock-only | force-unlock'
+    required: true
+  state-key:
+    description: 'Terraform state file key'
+    required: true
+  region:
+    description: 'AWS region'
+    required: true
+  table:
+    description: 'DynamoDB lock table'
+    required: true
+  bucket:
+    description: 'S3 bucket (unused for now)'
+    required: false
+  force-unlock:
+    description: 'Force unlock stuck state before action'
+    required: false
+    default: false
