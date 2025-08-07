@@ -9,6 +9,8 @@ spec:
     repoURL: https://github.com/Er3en/homeLab
     targetRevision: HEAD
     path: argo-apps/dev
+    directory:
+      recurse: true
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
@@ -16,5 +18,3 @@ spec:
     automated:
       prune: true
       selfHeal: true
-    syncOptions:
-      - CreateNamespace=true
