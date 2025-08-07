@@ -8,12 +8,9 @@ spec:
   source:
     repoURL: https://charts.jetstack.io
     chart: cert-manager
-    targetRevision: v1.14.3 # sprawdź najnowszą wersję na stronie Jetstack
+    targetRevision: v1.14.3
     helm:
-      parameters:
-        - name: installCRDs
-          value: "true"
-    helm:
+      releaseName: cert-manager
       values: |
         installCRDs: true
   destination:
@@ -23,3 +20,5 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
