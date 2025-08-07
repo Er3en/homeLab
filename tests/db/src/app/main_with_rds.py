@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from psycopg2.extras import RealDictCursor
 import psycopg2
 import uvicorn
+import dotenv
 
 app = FastAPI(title="Simple REST API")
 

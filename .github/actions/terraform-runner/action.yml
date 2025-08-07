@@ -1,0 +1,79 @@
+name: 'Terraform Runner'
+description: 'Runs Terraform deploy/destroy operations'
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ inputs.terraform_version }}
+
+    - name: Init Terraform
+      shell: bash
+      working-directory: ./cluster/terraform/environments/${{ inputs.environment }}
+      run: |
+        terraform init \
+          -backend-config="bucket=${{ inputs.backend_bucket }}" \
+          -backend-config="key=${{ inputs.backend_key }}" \
+          -backend-config="region=${{ inputs.backend_region }}" \
+          -backend-config="dynamodb_table=${{ inputs.backend_table }}" \
+          -backend-config="encrypt=true" \
+          -upgrade
+
+    - name: Plan or Destroy
+      shell: bash
+      working-directory: ./cluster/terraform/environments/${{ inputs.environment }}
+      run: |
+        export TF_VAR_cluster_name=${{ inputs.cluster_name }}
+        export TF_VAR_environment=${{ inputs.environment }}
+
+        if [[ "${{ inputs.action }}" == "destroy" ]]; then
+          echo "🗑️ Destroying EKS cluster..."
+          terraform destroy -auto-approve -no-color || {
+            echo "⚠️ Destroy failed. Trying again without locking..."
+            terraform destroy -auto-approve -no-color -lock=false || true
+          }
+        else
+          echo "📋 Planning and applying infrastructure..."
+          terraform plan -out=tfplan -no-color
+          terraform apply -auto-approve tfplan
+        fi
+
+    - name: Extract Outputs
+      if: ${{ inputs.action == 'deploy' }}
+      id: outputs
+      shell: bash
+      working-directory: ./cluster/terraform/environments/${{ inputs.environment }}
+      run: |
+        CLUSTER_ENDPOINT=$(terraform output -raw cluster_endpoint 2>/dev/null || echo "")
+        CLUSTER_NAME=$(terraform output -raw cluster_name 2>/dev/null || echo "${{ inputs.cluster_name }}")
+
+        echo "cluster_endpoint=$CLUSTER_ENDPOINT" >> $GITHUB_OUTPUT
+        echo "cluster_name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
+
+inputs:
+  action:
+    description: 'deploy | destroy'
+    required: true
+  cluster_name:
+    description: 'Name of the EKS cluster'
+    required: true
+  environment:
+    description: 'Environment: dev/staging/prod'
+    required: true
+  terraform_version:
+    description: 'Terraform version'
+    required: false
+    default: '1.9.0'
+  backend_bucket:
+    description: 'S3 backend bucket name'
+    required: true
+  backend_key:
+    description: 'Terraform state key in S3'
+    required: true
+  backend_region:
+    description: 'AWS region for the backend'
+    required: true
+  backend_table:
+    description: 'DynamoDB table for locking'
+    required: true
