@@ -84,6 +84,16 @@ jobs:
           backend_region: ${{ vars.AWS_REGION }}
           backend_table: ${{ vars.TF_STATE_LOCK_TABLE }}
 
+
+      - name: Install Argo CD and Sync GitOps Apps
+        if: ${{ github.event.inputs.action == 'deploy' && success() }}
+        uses: ./.github/actions/install-argocd
+        with:
+          cluster_name: ${{ github.event.inputs.name }}
+          region: ${{ vars.AWS_REGION }}
+          apps_path: ./argo-apps/${{ github.event.inputs.environment }}
+
+
       - name: Generate Connect Script
         if: ${{ github.event.inputs.action == 'deploy' }}
         run: |

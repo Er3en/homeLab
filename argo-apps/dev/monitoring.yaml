@@ -1,0 +1,53 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring
+  namespace: argocd
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: 58.3.0  # <- Check for latest version
+    helm:
+      values: |
+        grafana:
+          ingress:
+            enabled: true
+            annotations:
+              cert-manager.io/cluster-issuer: letsencrypt-prod
+              nginx.ingress.kubernetes.io/ssl-redirect: "true"
+            hosts:
+              - grafana.${CLUSTER_DOMAIN}
+            tls:
+              - hosts:
+                  - grafana.${CLUSTER_DOMAIN}
+                secretName: grafana-tls
+          adminPassword: "admin"
+          adminUser: "admin"
+
+        prometheus:
+          ingress:
+            enabled: true
+            annotations:
+              cert-manager.io/cluster-issuer: letsencrypt-prod
+              nginx.ingress.kubernetes.io/ssl-redirect: "true"
+            hosts:
+              - prometheus.${CLUSTER_DOMAIN}
+            tls:
+              - hosts:
+                  - prometheus.${CLUSTER_DOMAIN}
+                secretName: prometheus-tls
+
+        prometheus-node-exporter:
+          enabled: true
+
+        kube-state-metrics:
+          enabled: true
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

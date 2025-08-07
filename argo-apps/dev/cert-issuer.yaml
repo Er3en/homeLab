@@ -4,11 +4,11 @@ metadata:
   name: letsencrypt-prod
 spec:
   acme:
+    email: you@example.com
     server: https://acme-v02.api.letsencrypt.org/directory
-    email: twoj-email@domena.pl  
     privateKeySecretRef:
-      name: letsencrypt-prod-private-key
+      name: letsencrypt-prod
     solvers:
-    - http01:
-        ingress:
-          class: nginx
+      - http01:
+          ingress:
+            class: public-nginx

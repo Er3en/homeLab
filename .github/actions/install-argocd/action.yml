@@ -1,0 +1,34 @@
+name: 'Install Argo CD'
+description: 'Installs Argo CD and syncs GitOps apps'
+inputs:
+  cluster_name:
+    required: true
+  region:
+    required: true
+  apps_path:
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure kubeconfig
+      shell: bash
+      run: |
+        aws eks update-kubeconfig \
+          --region "${{ inputs.region }}" \
+          --name "${{ inputs.cluster_name }}"
+
+    - name: Install Argo CD
+      shell: bash
+      run: |
+        kubectl create namespace argocd || true
+        kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+    - name: Wait for Argo CD
+      shell: bash
+      run: |
+        kubectl rollout status deployment argocd-server -n argocd --timeout=180s
+
+    - name: Apply Argo CD root Application
+      shell: bash
+      run: |
+        kubectl apply -f "${{ inputs.apps_path }}/root-app.yaml"

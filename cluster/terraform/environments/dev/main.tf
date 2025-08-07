@@ -23,6 +23,11 @@ provider "aws" {
   }
 }
 
+data "aws_route53_zone" "main" {
+  name         = "jarybski-dev.com"
+  private_zone = false
+}
+
 # Get default VPC
 data "aws_vpc" "default" {
   default = true

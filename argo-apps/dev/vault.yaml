@@ -1,20 +1,17 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: nginx
+  name: external-secrets
   namespace: argocd
 spec:
+  destination:
+    namespace: external-secrets
+    server: https://kubernetes.default.svc
   project: default
   source:
-    repoURL: 'https://github.com/Er3en/homeLab'
-    targetRevision: HEAD
-    path: apps/nginx/helm
-    helm:
-      valueFiles:
-        - values.yaml
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: dev
+    repoURL: https://charts.external-secrets.io
+    chart: external-secrets
+    targetRevision: 0.9.14
   syncPolicy:
     automated:
       prune: true
