@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: fastapi-deployment
+  namespace: default
   labels:
     app: fastapi
 spec:
@@ -33,27 +34,41 @@ spec:
             periodSeconds: 15
       imagePullSecrets:
         - name: regcred
+
 ---
+
 apiVersion: v1
 kind: Service
 metadata:
   name: fastapi-service
+  namespace: default
 spec:
-  type: NodePort
   selector:
     app: fastapi
   ports:
-    - port: 80
+    - protocol: TCP
+      port: 80
       targetPort: 8083
-      nodePort: 30083
+  type: ClusterIP
 
---- 
-apiVersion: v1
-kind: Service
+---
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fastapi-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
-  type: LoadBalancer
-  selector:
-    app: fastapi
-    ports:
-    - port: 80
-      targetPort: 8083
+  ingressClassName: public-nginx
+  rules:
+    - host: api.jarybski-dev.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: fastapi-service
+                port:
+                  number: 80
